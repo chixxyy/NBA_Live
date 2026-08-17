@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@layer utilities {
+  .tier-bg-S {
+    @apply bg-gradient-to-br from-yellow-400 to-yellow-600 text-white shadow-yellow-500/50;
+  }
+  .tier-bg-A {
+    @apply bg-gradient-to-br from-purple-500 to-purple-700 text-white shadow-purple-500/50;
+  }
+  .tier-bg-B {
+    @apply bg-gradient-to-br from-blue-500 to-blue-700 text-white shadow-blue-500/50;
+  }
+  .tier-bg-C {
+    @apply bg-gradient-to-br from-emerald-500 to-green-700 text-white shadow-green-500/50;
+  }
+  .tier-bg-D {
+    @apply bg-gradient-to-br from-gray-200 to-gray-400 text-gray-800 shadow-gray-400/50;
+  }
+}
+
+body {
+  @apply bg-gray-900 text-white;
+}
