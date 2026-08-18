@@ -1,10 +1,17 @@
 <script setup lang="ts">
+import { fallbackPlayers } from "../data/fallbackPlayers";
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { createClient } from '@supabase/supabase-js'
 import type { Player } from '../types'
 
 const props = defineProps<{
   player: Player
+  initialTeam?: Player[]
+  initialSalaryCap?: number
+}>()
+
+const emit = defineEmits<{
+  (e: 'start-matchup', myTeam: Player[], opponentTeam: Player[], currentSalaryCap: number): void
 }>()
 
 const players = ref<Player[]>([])
@@ -17,7 +24,93 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
 const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 const myTeam = ref<Player[]>([])
+const opponentTeam = ref<Player[]>([])
 const isGameStarted = ref(false)
+
+const lockTeam = () => {
+  isGameStarted.value = true
+}
+
+const showDifficultyModal = ref(false)
+const difficulty = ref('Pro')
+
+const openDifficultyModal = () => {
+  if (myTeam.value.length !== 10) return
+  showDifficultyModal.value = true
+}
+
+const startMatchup = (level: string) => {
+  difficulty.value = level
+  showDifficultyModal.value = false
+  
+  const available = players.value.filter(p => !myTeam.value.some(m => m.id === p.id))
+  
+  for (let i = available.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [available[i], available[j]] = [available[j], available[i]]
+  }
+
+  const opp: Player[] = []
+
+  const pickSpecific = (tier: string, posStr: string, isBench: boolean) => {
+    let p = available.find(p => p.tier === tier && p.position.includes(posStr) && !opp.some(o => o.id === p.id))
+    if (!p) p = available.find(p => p.position.includes(posStr) && !opp.some(o => o.id === p.id)) // Relax tier first
+    if (!p) p = available.find(p => p.tier === tier && !opp.some(o => o.id === p.id))
+    if (!p) p = available.find(p => !opp.some(o => o.id === p.id))
+    if (p) opp.push({ ...p, lineupPosition: posStr, isBench })
+  }
+  
+  const pickRandomRest = (posStr: string, isBench: boolean, excludeTiers: string[]) => {
+    let p = available.find(p => !excludeTiers.includes(p.tier) && p.position.includes(posStr) && !opp.some(o => o.id === p.id))
+    if (!p) p = available.find(p => p.position.includes(posStr) && !opp.some(o => o.id === p.id)) // Relax tier first
+    if (!p) p = available.find(p => !excludeTiers.includes(p.tier) && !opp.some(o => o.id === p.id))
+    if (!p) p = available.find(p => !opp.some(o => o.id === p.id))
+    if (p) opp.push({ ...p, lineupPosition: posStr, isBench })
+  }
+
+  if (level === 'Pro') {
+    pickSpecific('A', 'PG', false)
+    pickRandomRest('SG', false, ['S', 'A'])
+    pickRandomRest('SF', false, ['S', 'A'])
+    pickRandomRest('PF', false, ['S', 'A'])
+    pickRandomRest('C', false, ['S', 'A'])
+    for (let i=0; i<5; i++) pickRandomRest('', true, ['S', 'A'])
+  } else if (level === 'All-Star') {
+    pickSpecific('S', 'PG', false)
+    pickSpecific('A', 'SG', false)
+    pickSpecific('A', 'SF', false)
+    pickRandomRest('PF', false, ['S', 'A'])
+    pickRandomRest('C', false, ['S', 'A'])
+    for (let i=0; i<5; i++) pickRandomRest('', true, ['S', 'A'])
+  } else if (level === 'HallOfFame') {
+    pickSpecific('S', 'PG', false)
+    pickSpecific('S', 'SG', false)
+    pickSpecific('A', 'SF', false)
+    pickSpecific('A', 'PF', false)
+    pickSpecific('A', 'C', false)
+    for (let i=0; i<5; i++) pickRandomRest('', true, ['S', 'A'])
+  }
+
+  // Fallback if not enough players found
+  const positions = ['PG', 'SG', 'SF', 'PF', 'C']
+  let currentStarters = opp.filter(p => !p.isBench).length
+  while (currentStarters < 5) {
+    const pos = positions[currentStarters]
+    let p = available.find(p => p.position.includes(pos) && !opp.some(o => o.id === p.id))
+    if (!p) p = available.find(p => !opp.some(o => o.id === p.id))
+    if (p) opp.push({ ...p, lineupPosition: pos, isBench: false })
+    currentStarters++
+  }
+  let currentBench = opp.filter(p => p.isBench).length
+  while (currentBench < 5) {
+    let p = available.find(p => !opp.some(o => o.id === p.id))
+    if (p) opp.push({ ...p, lineupPosition: '', isBench: true })
+    currentBench++
+  }
+
+  opponentTeam.value = opp
+  emit('start-matchup', myTeam.value, opponentTeam.value, salaryCap.value)
+}
 
 const generateTeammates = () => {
   const allPositions = ['PG', 'SG', 'SF', 'PF', 'C']
@@ -43,6 +136,9 @@ const generateTeammates = () => {
   const pickForPosition = (tier: string, posStr: string, isBench: boolean = false) => {
     let pool = players.value.filter(p => p.tier === tier && p.position.includes(posStr) && p.id !== props.player.id && !newTeammates.some(t => t.id === p.id))
     if (pool.length === 0) {
+      pool = players.value.filter(p => p.position.includes(posStr) && p.id !== props.player.id && !newTeammates.some(t => t.id === p.id)) // Relax tier, keep pos
+    }
+    if (pool.length === 0) {
       pool = players.value.filter(p => p.tier === tier && p.id !== props.player.id && !newTeammates.some(t => t.id === p.id))
     }
     if (pool.length === 0) {
@@ -60,17 +156,18 @@ const generateTeammates = () => {
   pickForPosition('D', dPos1, false)
   pickForPosition('D', dPos2, false)
 
-  // Bench (5 players, one for each position)
-  const benchPositions = [...allPositions]
-  for (let i = benchPositions.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [benchPositions[i], benchPositions[j]] = [benchPositions[j], benchPositions[i]]
+  // Bench (5 players, no specific lineupPosition required)
+  const pickBench = (tier: string) => {
+    let pool = players.value.filter(p => p.tier === tier && p.id !== props.player.id && !newTeammates.some(t => t.id === p.id))
+    if (pool.length === 0) pool = players.value.filter(p => p.id !== props.player.id && !newTeammates.some(t => t.id === p.id))
+    const picked = pool.length ? pool[Math.floor(Math.random() * pool.length)] : null
+    if (picked) newTeammates.push({ ...picked, lineupPosition: '', isBench: true })
   }
-  pickForPosition('B', benchPositions[0], true)
-  pickForPosition('C', benchPositions[1], true)
-  pickForPosition('C', benchPositions[2], true)
-  pickForPosition('D', benchPositions[3], true)
-  pickForPosition('D', benchPositions[4], true)
+  pickBench('B')
+  pickBench('C')
+  pickBench('C')
+  pickBench('D')
+  pickBench('D')
 
   const clonedTeammates = newTeammates
   
@@ -125,7 +222,7 @@ const selectedTierFilter = ref<string>('All')
 const isTrading = ref(false)
 const selectedTradePlayer = ref<Player | null>(null)
 const pendingTrade = ref<{ source: Player, target: Player } | null>(null)
-const salaryCap = ref(100000000)
+const salaryCap = ref(props.initialSalaryCap || 100000000)
 
 const startTrade = (member: Player) => {
   isTrading.value = true
@@ -192,8 +289,19 @@ const getTradeCapModifier = (player: Player) => {
 const teamSalary = computed(() => myTeam.value.reduce((sum, p) => sum + getDynamicPrice(p), 0))
 
 const filteredPlayers = computed(() => {
-  if (selectedTierFilter.value === 'All') return players.value
-  return players.value.filter(p => p.tier === selectedTierFilter.value)
+  let list = players.value
+  if (selectedTierFilter.value !== 'All') {
+    list = list.filter(p => p.tier === selectedTierFilter.value)
+  }
+  if (isTrading.value && selectedTradePlayer.value) {
+    // Only filter by position if trading a STARTER
+    if (!selectedTradePlayer.value.isBench && selectedTradePlayer.value.lineupPosition) {
+      const requiredPos = selectedTradePlayer.value.lineupPosition
+      list = list.filter(p => p.position.includes(requiredPos))
+    }
+    // If trading a bench player, we do NOT filter the list by position!
+  }
+  return list
 })
 
 const currentPage = ref(1)
@@ -218,30 +326,46 @@ const onDragStart = (e: DragEvent, player: Player) => {
 const onDrop = (targetPlayer: Player) => {
   if (!draggedPlayer.value || draggedPlayer.value.id === targetPlayer.id) return
 
-  const source = draggedPlayer.value
-  const target = targetPlayer
+  const source = myTeam.value.find(p => p.id === draggedPlayer.value!.id)
+  const target = myTeam.value.find(p => p.id === targetPlayer.id)
+
+  if (!source || !target || source.id === target.id) return
 
   // Check compatibility
-  // A can play B's lineupPosition if A.position includes B.lineupPosition
-  // B can play A's lineupPosition if B.position includes A.lineupPosition
-  if (source.position.includes(target.lineupPosition || '') && target.position.includes(source.lineupPosition || '')) {
-    // Swap lineupPosition and isBench
-    const tempLineupPos = source.lineupPosition
-    const tempIsBench = source.isBench
+  const targetNeeds = target.isBench ? '' : target.lineupPosition
+  const sourceNeeds = source.isBench ? '' : source.lineupPosition
+  
+  const sourceCanPlayTarget = targetNeeds ? source.position.includes(targetNeeds) : true
+  const targetCanPlaySource = sourceNeeds ? target.position.includes(sourceNeeds) : true
 
-    source.lineupPosition = target.lineupPosition
-    source.isBench = target.isBench
+  if (sourceCanPlayTarget && targetCanPlaySource) {
+    if (source.isBench && target.isBench) {
+      // Both are bench players. Swap their indices in the array to visually reorder them
+      const sourceIdx = myTeam.value.findIndex(p => p.id === source.id)
+      const targetIdx = myTeam.value.findIndex(p => p.id === target.id)
+      
+      const temp = myTeam.value[sourceIdx]
+      myTeam.value[sourceIdx] = myTeam.value[targetIdx]
+      myTeam.value[targetIdx] = temp
+    } else {
+      // Swap lineupPosition and isBench
+      const tempLineupPos = source.lineupPosition
+      const tempIsBench = source.isBench
 
-    target.lineupPosition = tempLineupPos
-    target.isBench = tempIsBench
+      source.lineupPosition = target.lineupPosition
+      source.isBench = target.isBench
 
-    // Resort myTeam
-    const posOrder: Record<string, number> = { 'PG': 1, 'SG': 2, 'SF': 3, 'PF': 4, 'C': 5 }
-    myTeam.value.sort((a, b) => {
-      const aWeight = (a.isBench ? 10 : 0) + (posOrder[a.lineupPosition || ''] || 9)
-      const bWeight = (b.isBench ? 10 : 0) + (posOrder[b.lineupPosition || ''] || 9)
-      return aWeight - bWeight
-    })
+      target.lineupPosition = tempLineupPos
+      target.isBench = tempIsBench
+
+      // Resort myTeam
+      const posOrder: Record<string, number> = { 'PG': 1, 'SG': 2, 'SF': 3, 'PF': 4, 'C': 5 }
+      myTeam.value.sort((a, b) => {
+        const aWeight = (a.isBench ? 10 : 0) + (posOrder[a.lineupPosition || ''] || 9)
+        const bWeight = (b.isBench ? 10 : 0) + (posOrder[b.lineupPosition || ''] || 9)
+        return aWeight - bWeight
+      })
+    }
   }
 
   draggedPlayer.value = null
@@ -335,758 +459,7 @@ const fetchPlayers = async () => {
     console.error('Fetch error:', e)
     if (players.value.length === 0) {
       error.value = '無法連接即時伺服器'
-      players.value = [
-  {
-    "id": "1",
-    "name": "De'Aaron Fox",
-    "team": "SAC",
-    "position": "PG/SG",
-    "price": 25000000,
-    "score": 90,
-    "tier": "A",
-    "pts": 26.6,
-    "reb": 4.6,
-    "ast": 5.6,
-    "stl": 2,
-    "blk": 0.2,
-    "tov": 2.6
-  },
-  {
-    "id": "2",
-    "name": "Anthony Edwards",
-    "team": "MIN",
-    "position": "SG/SF",
-    "price": 26000000,
-    "score": 91,
-    "tier": "A",
-    "pts": 25.9,
-    "reb": 5.4,
-    "ast": 5.1,
-    "stl": 1.3,
-    "blk": 0.5,
-    "tov": 3.1
-  },
-  {
-    "id": "3",
-    "name": "Kawhi Leonard",
-    "team": "LAC",
-    "position": "SF/PF",
-    "price": 28000000,
-    "score": 92,
-    "tier": "A",
-    "pts": 23.7,
-    "reb": 6.1,
-    "ast": 3.6,
-    "stl": 1.6,
-    "blk": 0.9,
-    "tov": 1.8
-  },
-  {
-    "id": "4",
-    "name": "Zion Williamson",
-    "team": "NOP",
-    "position": "PF/C",
-    "price": 24000000,
-    "score": 90,
-    "tier": "A",
-    "pts": 22.9,
-    "reb": 5.8,
-    "ast": 5,
-    "stl": 1.1,
-    "blk": 0.7,
-    "tov": 2.8
-  },
-  {
-    "id": "5",
-    "name": "Bam Adebayo",
-    "team": "MIA",
-    "position": "C/PF",
-    "price": 27000000,
-    "score": 90,
-    "tier": "A",
-    "pts": 19.3,
-    "reb": 10.4,
-    "ast": 3.9,
-    "stl": 1.1,
-    "blk": 0.9,
-    "tov": 2.3
-  },
-  {
-    "id": "6",
-    "name": "Nikola Jokic",
-    "team": "DEN",
-    "position": "C",
-    "price": 35000000,
-    "score": 99,
-    "tier": "S",
-    "pts": 26.4,
-    "reb": 12.4,
-    "ast": 9,
-    "stl": 1.4,
-    "blk": 0.9,
-    "tov": 3
-  },
-  {
-    "id": "7",
-    "name": "Luka Doncic",
-    "team": "DAL",
-    "position": "PG/SG",
-    "price": 35000000,
-    "score": 98,
-    "tier": "S",
-    "pts": 33.9,
-    "reb": 9.2,
-    "ast": 9.8,
-    "stl": 1.4,
-    "blk": 0.5,
-    "tov": 4
-  },
-  {
-    "id": "8",
-    "name": "Giannis Antetokounmpo",
-    "team": "MIL",
-    "position": "PF/C",
-    "price": 35000000,
-    "score": 97,
-    "tier": "S",
-    "pts": 30.4,
-    "reb": 11.5,
-    "ast": 6.5,
-    "stl": 1.2,
-    "blk": 1.1,
-    "tov": 3.4
-  },
-  {
-    "id": "9",
-    "name": "Shai Gilgeous-Alexander",
-    "team": "OKC",
-    "position": "PG/SG",
-    "price": 35000000,
-    "score": 96,
-    "tier": "S",
-    "pts": 30.1,
-    "reb": 5.5,
-    "ast": 6.2,
-    "stl": 2,
-    "blk": 0.9,
-    "tov": 2.2
-  },
-  {
-    "id": "10",
-    "name": "Joel Embiid",
-    "team": "PHI",
-    "position": "C",
-    "price": 35000000,
-    "score": 96,
-    "tier": "S",
-    "pts": 34.7,
-    "reb": 11,
-    "ast": 5.6,
-    "stl": 1.2,
-    "blk": 1.7,
-    "tov": 3.8
-  },
-  {
-    "id": "11",
-    "name": "Jayson Tatum",
-    "team": "BOS",
-    "position": "SF/PF",
-    "price": 28000000,
-    "score": 94,
-    "tier": "A",
-    "pts": 26.9,
-    "reb": 8.1,
-    "ast": 4.9,
-    "stl": 1,
-    "blk": 0.6,
-    "tov": 2.5
-  },
-  {
-    "id": "12",
-    "name": "Stephen Curry",
-    "team": "GSW",
-    "position": "PG",
-    "price": 28000000,
-    "score": 93,
-    "tier": "A",
-    "pts": 26.4,
-    "reb": 4.5,
-    "ast": 5.1,
-    "stl": 0.7,
-    "blk": 0.4,
-    "tov": 2.8
-  },
-  {
-    "id": "13",
-    "name": "Kevin Durant",
-    "team": "PHX",
-    "position": "PF/SF",
-    "price": 28000000,
-    "score": 93,
-    "tier": "A",
-    "pts": 27.1,
-    "reb": 6.6,
-    "ast": 5,
-    "stl": 0.9,
-    "blk": 1.2,
-    "tov": 3.3
-  },
-  {
-    "id": "14",
-    "name": "LeBron James",
-    "team": "LAL",
-    "position": "SF/PF",
-    "price": 27000000,
-    "score": 92,
-    "tier": "A",
-    "pts": 25.7,
-    "reb": 7.3,
-    "ast": 8.3,
-    "stl": 1.3,
-    "blk": 0.5,
-    "tov": 3.5
-  },
-  {
-    "id": "15",
-    "name": "Anthony Davis",
-    "team": "LAL",
-    "position": "C/PF",
-    "price": 27000000,
-    "score": 92,
-    "tier": "A",
-    "pts": 24.7,
-    "reb": 12.6,
-    "ast": 3.5,
-    "stl": 1.2,
-    "blk": 2.3,
-    "tov": 2.1
-  },
-  {
-    "id": "16",
-    "name": "Devin Booker",
-    "team": "PHX",
-    "position": "SG/PG",
-    "price": 26000000,
-    "score": 90,
-    "tier": "A",
-    "pts": 27.1,
-    "reb": 4.5,
-    "ast": 6.9,
-    "stl": 0.9,
-    "blk": 0.4,
-    "tov": 2.6
-  },
-  {
-    "id": "17",
-    "name": "Tyrese Haliburton",
-    "team": "FA",
-    "position": "PF",
-    "price": 15000000,
-    "score": 85,
-    "tier": "B",
-    "pts": 15,
-    "reb": 5,
-    "ast": 5,
-    "stl": 1,
-    "blk": 1,
-    "tov": 2
-  },
-  {
-    "id": "18",
-    "name": "Domantas Sabonis",
-    "team": "FA",
-    "position": "C",
-    "price": 15000000,
-    "score": 85,
-    "tier": "B",
-    "pts": 15,
-    "reb": 5,
-    "ast": 5,
-    "stl": 1,
-    "blk": 1,
-    "tov": 2
-  },
-  {
-    "id": "19",
-    "name": "Mikal Bridges",
-    "team": "FA",
-    "position": "PG",
-    "price": 15000000,
-    "score": 85,
-    "tier": "B",
-    "pts": 15,
-    "reb": 5,
-    "ast": 5,
-    "stl": 1,
-    "blk": 1,
-    "tov": 2
-  },
-  {
-    "id": "20",
-    "name": "Jamal Murray",
-    "team": "FA",
-    "position": "SG",
-    "price": 15000000,
-    "score": 85,
-    "tier": "B",
-    "pts": 15,
-    "reb": 5,
-    "ast": 5,
-    "stl": 1,
-    "blk": 1,
-    "tov": 2
-  },
-  {
-    "id": "21",
-    "name": "Austin Reaves",
-    "team": "FA",
-    "position": "SF",
-    "price": 15000000,
-    "score": 85,
-    "tier": "B",
-    "pts": 15,
-    "reb": 5,
-    "ast": 5,
-    "stl": 1,
-    "blk": 1,
-    "tov": 2
-  },
-  {
-    "id": "22",
-    "name": "D'Angelo Russell",
-    "team": "FA",
-    "position": "PF",
-    "price": 15000000,
-    "score": 85,
-    "tier": "B",
-    "pts": 15,
-    "reb": 5,
-    "ast": 5,
-    "stl": 1,
-    "blk": 1,
-    "tov": 2
-  },
-  {
-    "id": "23",
-    "name": "Naz Reid",
-    "team": "FA",
-    "position": "C",
-    "price": 15000000,
-    "score": 85,
-    "tier": "B",
-    "pts": 15,
-    "reb": 5,
-    "ast": 5,
-    "stl": 1,
-    "blk": 1,
-    "tov": 2
-  },
-  {
-    "id": "24",
-    "name": "Malik Monk",
-    "team": "FA",
-    "position": "PG",
-    "price": 15000000,
-    "score": 85,
-    "tier": "B",
-    "pts": 15,
-    "reb": 5,
-    "ast": 5,
-    "stl": 1,
-    "blk": 1,
-    "tov": 2
-  },
-  {
-    "id": "25",
-    "name": "Rui Hachimura",
-    "team": "FA",
-    "position": "SG",
-    "price": 15000000,
-    "score": 85,
-    "tier": "B",
-    "pts": 15,
-    "reb": 5,
-    "ast": 5,
-    "stl": 1,
-    "blk": 1,
-    "tov": 2
-  },
-  {
-    "id": "26",
-    "name": "Herbert Jones",
-    "team": "FA",
-    "position": "SF",
-    "price": 15000000,
-    "score": 85,
-    "tier": "B",
-    "pts": 15,
-    "reb": 5,
-    "ast": 5,
-    "stl": 1,
-    "blk": 1,
-    "tov": 2
-  },
-  {
-    "id": "27",
-    "name": "Gary Payton II",
-    "team": "FA",
-    "position": "PF",
-    "price": 15000000,
-    "score": 85,
-    "tier": "B",
-    "pts": 15,
-    "reb": 5,
-    "ast": 5,
-    "stl": 1,
-    "blk": 1,
-    "tov": 2
-  },
-  {
-    "id": "28",
-    "name": "Jose Alvarado",
-    "team": "FA",
-    "position": "C",
-    "price": 15000000,
-    "score": 85,
-    "tier": "B",
-    "pts": 15,
-    "reb": 5,
-    "ast": 5,
-    "stl": 1,
-    "blk": 1,
-    "tov": 2
-  },
-  {
-    "id": "29",
-    "name": "Sam Hauser",
-    "team": "FA",
-    "position": "PG",
-    "price": 15000000,
-    "score": 85,
-    "tier": "B",
-    "pts": 15,
-    "reb": 5,
-    "ast": 5,
-    "stl": 1,
-    "blk": 1,
-    "tov": 2
-  },
-  {
-    "id": "30",
-    "name": "Peyton Watson",
-    "team": "FA",
-    "position": "SG",
-    "price": 15000000,
-    "score": 85,
-    "tier": "B",
-    "pts": 15,
-    "reb": 5,
-    "ast": 5,
-    "stl": 1,
-    "blk": 1,
-    "tov": 2
-  },
-  {
-    "id": "31",
-    "name": "Luke Kornet",
-    "team": "FA",
-    "position": "SF",
-    "price": 15000000,
-    "score": 85,
-    "tier": "B",
-    "pts": 15,
-    "reb": 5,
-    "ast": 5,
-    "stl": 1,
-    "blk": 1,
-    "tov": 2
-  },
-  {
-    "id": "32",
-    "name": "Christian Braun",
-    "team": "FA",
-    "position": "PF",
-    "price": 15000000,
-    "score": 85,
-    "tier": "B",
-    "pts": 15,
-    "reb": 5,
-    "ast": 5,
-    "stl": 1,
-    "blk": 1,
-    "tov": 2
-  },
-  {
-    "id": "33",
-    "name": "Player 34",
-    "team": "FA",
-    "position": "C",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "34",
-    "name": "Player 35",
-    "team": "FA",
-    "position": "PG",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "35",
-    "name": "Player 36",
-    "team": "FA",
-    "position": "SG",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "36",
-    "name": "Player 37",
-    "team": "FA",
-    "position": "SF",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "37",
-    "name": "Player 38",
-    "team": "FA",
-    "position": "PF",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "38",
-    "name": "Player 39",
-    "team": "FA",
-    "position": "C",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "39",
-    "name": "Player 40",
-    "team": "FA",
-    "position": "PG",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "40",
-    "name": "Player 41",
-    "team": "FA",
-    "position": "SG",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "41",
-    "name": "Player 42",
-    "team": "FA",
-    "position": "SF",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "42",
-    "name": "Player 43",
-    "team": "FA",
-    "position": "PF",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "43",
-    "name": "Player 44",
-    "team": "FA",
-    "position": "C",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "44",
-    "name": "Player 45",
-    "team": "FA",
-    "position": "PG",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "45",
-    "name": "Player 46",
-    "team": "FA",
-    "position": "SG",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "46",
-    "name": "Player 47",
-    "team": "FA",
-    "position": "SF",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "47",
-    "name": "Player 48",
-    "team": "FA",
-    "position": "PF",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "48",
-    "name": "Player 49",
-    "team": "FA",
-    "position": "C",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "49",
-    "name": "Player 50",
-    "team": "FA",
-    "position": "PG",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  },
-  {
-    "id": "50",
-    "name": "Player 51",
-    "team": "FA",
-    "position": "SG",
-    "price": 5000000,
-    "score": 75,
-    "tier": "D",
-    "pts": 10,
-    "reb": 3,
-    "ast": 2,
-    "stl": 0.5,
-    "blk": 0.5,
-    "tov": 1
-  }
-].map(p => p.id === props.player.id ? props.player : p)
+      players.value = fallbackPlayers.map((p: any) => p.id === props.player.id ? props.player : p)
     }
   } finally {
     loading.value = false
@@ -1098,7 +471,11 @@ const fetchPlayers = async () => {
       return b.score - a.score
     })
     if (myTeam.value.length === 0) {
-      generateTeammates()
+      if (props.initialTeam && props.initialTeam.length === 10) {
+        myTeam.value = props.initialTeam
+      } else {
+        generateTeammates()
+      }
     }
   }
 }
@@ -1169,7 +546,7 @@ onMounted(() => {
         const updated = players.value.find(p => p.id === member.id)
         return updated ? { ...member, score: updated.score, tier: updated.tier, pts: updated.pts } : member
       })
-    }, 5000)
+    }, 30000)
   }
 })
 
@@ -1201,21 +578,39 @@ const getTierBorder = (tier: string) => {
               總薪資: <span :class="['font-mono', teamSalary > salaryCap ? 'text-red-400' : 'text-green-400']">${{ (teamSalary / 1000000).toFixed(1) }}M</span> / ${{ (salaryCap / 1000000).toFixed(1) }}M
             </div>
           </div>
-          <div v-if="!isGameStarted" class="flex gap-3">
-            <button @click="generateTeammates" class="px-6 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold italic uppercase tracking-widest rounded-full shadow-lg border border-gray-600 transition-all active:scale-95">
+          <div class="flex gap-3">
+            <button 
+              v-if="!isGameStarted"
+              @click="generateTeammates" 
+              class="px-6 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold italic tracking-wider rounded-full border border-gray-600 transition-colors"
+            >
               重新尋找隊友
             </button>
-            <button @click="isGameStarted = true" class="px-6 py-2 bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 text-white font-bold italic uppercase tracking-widest rounded-full shadow-lg hover:shadow-orange-500/50 transition-all transform hover:scale-105 active:scale-95">
+            <button 
+              v-if="!isGameStarted"
+              :disabled="myTeam.length !== 10"
+              @click="lockTeam" 
+              class="px-8 py-2 bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 text-white font-black italic uppercase tracking-widest rounded-full shadow-lg hover:shadow-orange-500/50 transition-all transform hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+              :title="myTeam.length !== 10 ? '必須湊齊 10 名球員' : ''"
+            >
               進入遊戲
             </button>
-          </div>
-          <div v-else class="flex gap-3">
-            <button v-if="!isTrading" @click="isTrading = true" class="px-6 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 text-white font-bold italic uppercase tracking-widest rounded-full shadow-lg hover:shadow-blue-500/50 transition-all transform hover:scale-105 active:scale-95">
-              啟動交易模式
-            </button>
-            <button v-else @click="cancelTrade" class="px-6 py-2 bg-gradient-to-r from-red-500 to-pink-600 hover:from-red-400 hover:to-pink-500 text-white font-bold italic uppercase tracking-widest rounded-full shadow-lg hover:shadow-red-500/50 transition-all transform hover:scale-105 active:scale-95">
-              取消交易
-            </button>
+            <div v-else class="flex gap-3">
+              <button 
+                @click="openDifficultyModal" 
+                :disabled="myTeam.length !== 10"
+                :class="['px-6 py-2 font-bold italic uppercase tracking-widest rounded-full shadow-lg transition-all transform active:scale-95', myTeam.length === 10 ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 text-white hover:shadow-green-500/50 hover:scale-105' : 'bg-gray-800 text-gray-500 cursor-not-allowed']"
+                :title="myTeam.length !== 10 ? '必須湊齊 10 名球員' : ''"
+              >
+                進行例行賽
+              </button>
+              <button v-if="!isTrading" @click="isTrading = true" class="px-6 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 text-white font-bold italic uppercase tracking-widest rounded-full shadow-lg hover:shadow-blue-500/50 transition-all transform hover:scale-105 active:scale-95">
+                啟動交易模式
+              </button>
+              <button v-else @click="cancelTrade" class="px-6 py-2 bg-gradient-to-r from-red-500 to-pink-600 hover:from-red-400 hover:to-pink-500 text-white font-bold italic uppercase tracking-widest rounded-full shadow-lg hover:shadow-red-500/50 transition-all transform hover:scale-105 active:scale-95">
+                取消交易
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1492,6 +887,43 @@ const getTierBorder = (tier: string) => {
             確定交易
           </button>
         </div>
+      </div>
+    </div>
+
+    <!-- Difficulty Modal -->
+    <div v-if="showDifficultyModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+      <div class="bg-gray-900 border border-gray-700 rounded-2xl p-8 max-w-md w-full shadow-2xl relative overflow-hidden">
+        <h2 class="text-3xl font-black italic text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-yellow-300 mb-6 text-center">選擇難度</h2>
+        
+        <div class="space-y-4">
+          <button @click="startMatchup('Pro')" class="w-full p-4 rounded-xl border border-gray-700 bg-gray-800/50 hover:bg-gray-700 hover:border-gray-500 transition-all text-left group flex justify-between items-center">
+            <div>
+              <div class="font-bold text-xl text-white group-hover:text-blue-400">職業 (Pro)</div>
+              <div class="text-sm text-gray-400">對手包含 1 名 A 級球星帶隊</div>
+            </div>
+            <div class="text-2xl">🥉</div>
+          </button>
+          
+          <button @click="startMatchup('All-Star')" class="w-full p-4 rounded-xl border border-gray-700 bg-gray-800/50 hover:bg-gray-700 hover:border-gray-500 transition-all text-left group flex justify-between items-center">
+            <div>
+              <div class="font-bold text-xl text-white group-hover:text-purple-400">全明星 (All-Star)</div>
+              <div class="text-sm text-gray-400">對手包含 1 名 S 級、2 名 A 級球星</div>
+            </div>
+            <div class="text-2xl">🥈</div>
+          </button>
+          
+          <button @click="startMatchup('HallOfFame')" class="w-full p-4 rounded-xl border border-gray-700 bg-gray-800/50 hover:bg-gray-700 hover:border-gray-500 transition-all text-left group flex justify-between items-center shadow-lg shadow-orange-500/10">
+            <div>
+              <div class="font-bold text-xl text-white group-hover:text-orange-400">名人堂 (Hall of Fame)</div>
+              <div class="text-sm text-gray-400">對手包含 2 名 S 級、3 名 A 級球星</div>
+            </div>
+            <div class="text-2xl">🏆</div>
+          </button>
+        </div>
+
+        <button @click="showDifficultyModal = false" class="mt-6 w-full py-3 rounded-xl border border-gray-600 text-gray-400 hover:bg-gray-800 hover:text-white transition-colors">
+          取消
+        </button>
       </div>
     </div>
   </div>

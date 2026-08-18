@@ -3,18 +3,42 @@ import { ref } from 'vue'
 import type { Player } from './types'
 import DraftScreen from './components/DraftScreen.vue'
 import Dashboard from './components/Dashboard.vue'
+import MatchupScreen from './components/MatchupScreen.vue'
 
-const currentView = ref<'draft' | 'dashboard'>('draft')
+const currentView = ref<'draft' | 'dashboard' | 'matchup'>('draft')
 const selectedPlayer = ref<Player | null>(null)
+const myTeamRef = ref<Player[]>([])
+const opponentTeamRef = ref<Player[]>([])
+const salaryCapRef = ref<number>(100000000)
 
 const onSelectPlayer = (player: Player) => {
   selectedPlayer.value = player
   currentView.value = 'dashboard'
 }
 
-const onBack = () => {
+const onBackToDraft = () => {
   currentView.value = 'draft'
   selectedPlayer.value = null
+  myTeamRef.value = []
+  opponentTeamRef.value = []
+}
+
+const onStartMatchup = (team: Player[], oppTeam: Player[], currentSalaryCap: number) => {
+  myTeamRef.value = team
+  opponentTeamRef.value = oppTeam
+  salaryCapRef.value = currentSalaryCap
+  currentView.value = 'matchup'
+}
+
+const onBackToDashboard = (updatedTeam?: Player[], updatedSalaryCap?: number, isDefeat?: boolean) => {
+  if (isDefeat) {
+    myTeamRef.value = []
+    salaryCapRef.value = 100000000
+  } else {
+    if (updatedTeam) myTeamRef.value = updatedTeam
+    if (updatedSalaryCap) salaryCapRef.value = updatedSalaryCap
+  }
+  currentView.value = 'dashboard'
 }
 </script>
 
@@ -28,7 +52,7 @@ const onBack = () => {
       </div>
       <button 
         v-if="currentView === 'dashboard'" 
-        @click="onBack"
+        @click="onBackToDraft"
         class="text-sm font-medium text-gray-400 hover:text-white transition-colors flex items-center gap-1"
       >
         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -41,7 +65,20 @@ const onBack = () => {
     <main class="max-w-7xl mx-auto p-6 md:p-10">
       <Transition name="fade" mode="out-in">
         <DraftScreen v-if="currentView === 'draft'" @select="onSelectPlayer" />
-        <Dashboard v-else-if="currentView === 'dashboard' && selectedPlayer" :player="selectedPlayer" />
+        <Dashboard 
+          v-else-if="currentView === 'dashboard' && selectedPlayer" 
+          :player="selectedPlayer" 
+          :initial-team="myTeamRef"
+          :initial-salary-cap="salaryCapRef"
+          @start-matchup="onStartMatchup" 
+        />
+        <MatchupScreen 
+          v-else-if="currentView === 'matchup'" 
+          :my-team="myTeamRef" 
+          :opponent-team="opponentTeamRef" 
+          :salary-cap="salaryCapRef"
+          @back="onBackToDashboard" 
+        />
       </Transition>
     </main>
   </div>

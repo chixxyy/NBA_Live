@@ -1650,8 +1650,8 @@ async function main() {
   console.log("Starting Advanced Local Simulation Engine...")
   await initDatabase()
   
-  // Run loop every 5 seconds for fast, satisfying UI updates
-  setInterval(runGameLoop, 5000)
+  // Run loop every 30 seconds for stable UI updates
+  setInterval(runGameLoop, 30000)
   runGameLoop()
 }
 
