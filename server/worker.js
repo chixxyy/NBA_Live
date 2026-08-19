@@ -1577,39 +1577,13 @@ async function runGameLoop() {
     console.log(`Simulating stats for ${players.length} players...`)
 
     let updatedPlayers = players.map(player => {
-      const base = baseStatsMap.get(player.id) || player
+      // 50% chance to go up, 50% chance to go down by 1 point
+      let scoreChange = Math.random() > 0.5 ? 1 : -1
       
-      // 模擬真實球賽的單場表現：有時手感火熱（大波動），有時正常（小波動）
-      const isHot = Math.random() > 0.8
-      const volatility = isHot ? 3.0 : 1.0
+      // 首發球星(建隊基石)保底 90 分不在此處判斷，因為這裡不知誰是建隊基石，但在全聯盟榜單上正常升降是合理的。
+      let score = Math.max(60, Math.min(99, player.score + scoreChange))
       
-      const simulateGameStat = (baseStat, variance) => {
-        const gameStat = Math.max(0, baseStat + (Math.random() * variance * 2 - variance) * volatility)
-        return gameStat
-      }
-      
-      // Simulate a single game based on their true base average
-      const gamePts = simulateGameStat(base.pts, 8) // Can swing +/- 8 pts normally, up to 24 if hot
-      const gameReb = simulateGameStat(base.reb, 4)
-      const gameAst = simulateGameStat(base.ast, 4)
-      const gameStl = simulateGameStat(base.stl, 1)
-      const gameBlk = simulateGameStat(base.blk, 1)
-      const gameTov = simulateGameStat(base.tov, 2)
-      
-      // Update the running average: 98% current average, 2% this game's performance
-      // This prevents infinite drift, naturally regresses to the mean, and makes it much harder to dramatically increase stats quickly
-      const EMA_KEEP = 0.98
-      const EMA_NEW = 0.02
-      
-      const pts = Math.min(40, +(player.pts * EMA_KEEP + gamePts * EMA_NEW).toFixed(1))
-      const reb = +(player.reb * EMA_KEEP + gameReb * EMA_NEW).toFixed(1)
-      const ast = +(player.ast * EMA_KEEP + gameAst * EMA_NEW).toFixed(1)
-      const stl = +(player.stl * EMA_KEEP + gameStl * EMA_NEW).toFixed(1)
-      const blk = +(player.blk * EMA_KEEP + gameBlk * EMA_NEW).toFixed(1)
-      const tov = +(player.tov * EMA_KEEP + gameTov * EMA_NEW).toFixed(1)
-      
-      const score = updateScoreAndTier(base, { pts, reb, ast, stl, blk, tov })
-      return { ...player, pts, reb, ast, stl, blk, tov, score }
+      return { ...player, score }
     })
 
     // Sort by score descending to assign tiers based on strict ranking
@@ -1621,6 +1595,14 @@ async function runGameLoop() {
     // Rank 31-60: B (30 players)
     // Rank 61-80: C (20 players)
     // Rank 81-100: D (20 players)
+    const calculatePrice = (tier, score) => {
+      if (tier === 'S') return 35000000;
+      if (tier === 'A') return 24000000 + Math.max(0, score - 90) * 1000000;
+      if (tier === 'B') return 15000000 + Math.max(0, score - 85) * 1200000;
+      if (tier === 'C') return 5000000 + Math.max(0, score - 77) * 400000;
+      return 1000000 + Math.max(0, score - 70) * 200000;
+    }
+
     for (let i = 0; i < updatedPlayers.length; i++) {
       let newTier = 'D'
       if (i < 10) newTier = 'S'
@@ -1629,12 +1611,13 @@ async function runGameLoop() {
       else if (i < 80) newTier = 'C'
       
       updatedPlayers[i].tier = newTier
+      updatedPlayers[i].price = calculatePrice(newTier, updatedPlayers[i].score)
     }
 
     // Save back to DB
     for (const player of updatedPlayers) {
-      const { id, pts, reb, ast, stl, blk, tov, score, tier } = player
-      const { error: updateError } = await supabase.from('players').update({ pts, reb, ast, stl, blk, tov, score, tier }).eq('id', id)
+      const { id, pts, reb, ast, stl, blk, tov, score, tier, price } = player
+      const { error: updateError } = await supabase.from('players').update({ pts, reb, ast, stl, blk, tov, score, tier, price }).eq('id', id)
       if (updateError) {
         console.error(`Failed to update player ${id}:`, updateError.message)
       }
@@ -1650,8 +1633,8 @@ async function main() {
   console.log("Starting Advanced Local Simulation Engine...")
   await initDatabase()
   
-  // Run loop every 30 seconds for stable UI updates
-  setInterval(runGameLoop, 30000)
+  // Run loop every 10 seconds for more dynamic updates
+  setInterval(runGameLoop, 10000)
   runGameLoop()
 }
 

@@ -23,7 +23,7 @@ interface BoxScore {
 
 // Game State
 const quarter = ref(1)
-const clockTicks = ref(36) // 36 ticks per quarter (e.g., 20 sec per tick = 12 mins)
+const clockTicks = ref(30) // 30 ticks per quarter (24 sec per tick = 12 mins)
 const isSimulating = ref(false)
 const gameFinished = ref(false)
 let simInterval: number | null = null
@@ -40,7 +40,7 @@ const myScore = computed(() => props.myTeam.reduce((sum, p) => sum + (boxScores.
 const oppScore = computed(() => props.opponentTeam.reduce((sum, p) => sum + (boxScores.value[p.id]?.pts || 0), 0))
 
 const formatClock = computed(() => {
-  const totalSeconds = clockTicks.value * 20
+  const totalSeconds = clockTicks.value * 24
   const m = Math.floor(totalSeconds / 60)
   const s = totalSeconds % 60
   return `${m}:${s.toString().padStart(2, '0')}`
@@ -100,7 +100,7 @@ const tick = () => {
       return
     } else {
       quarter.value++
-      clockTicks.value = 36
+      clockTicks.value = 30
       // Quarter break stamina regen
       Object.keys(stamina.value).forEach(id => {
         stamina.value[id] = Math.min(100, stamina.value[id] + 20)
@@ -133,12 +133,30 @@ const simulatePossession = (
   const bs = boxScores.value[scorer.id]
   const stam = stamina.value[scorer.id]
   
-  // Scoring logic based on real stats, stamina, and OVR (score)
+  // Scoring logic based on real stats, stamina, and OVR difference against the defender
+  const defender = defRot[scorerPos].current
   const stamMod = stam / 100
-  // OVR effect: normalize OVR to a 0.5 ~ 1.2 multiplier (assuming OVR ranges roughly 70 ~ 100+)
-  const ovrMod = Math.max(0.5, scorer.score / 85) 
+  const defStamMod = stamina.value[defender.id] / 100
   
-  if (Math.random() < 0.35 * stamMod * (scorer.pts / 20) * ovrMod) {
+  let effOffOvr = scorer.score * stamMod
+  if (!scorer.position.includes(scorerPos)) effOffOvr -= 10
+
+  let effDefOvr = defender.score * defStamMod
+  if (!defender.position.includes(scorerPos)) effDefOvr -= 10
+  
+  const ovrDiff = effOffOvr - effDefOvr
+  
+  // Base chance ~45%. Every 1 point of OVR advantage adds ~1.5% chance
+  let scoreChance = 0.45 + (ovrDiff * 0.015)
+  
+  // High IRL scorers have a slightly higher baseline chance
+  const ptsMod = Math.max(0.7, Math.min(1.3, scorer.pts / 15))
+  scoreChance *= ptsMod
+  
+  // Cap between 10% and 85%
+  scoreChance = Math.max(0.1, Math.min(0.85, scoreChance))
+  
+  if (Math.random() < scoreChance) {
     // Made shot
     const pts = Math.random() < 0.3 ? 3 : 2
     bs.pts += pts
@@ -286,7 +304,7 @@ const endGame = () => {
     simInterval = null
   }
   
-  if (myTotalScore.value > oppTotalScore.value) {
+  if (myScore.value > oppScore.value) {
     showRewardOverlay.value = true
   }
 }
@@ -429,7 +447,7 @@ const sortedOppTeam = computed(() => {
           <span v-if="!gameFinished" class="text-3xl font-mono font-black text-gray-300 tabular-nums">{{ formatClock }}</span>
           
           <button v-if="!isSimulating && !gameFinished" @click="startSimulation" class="mt-4 px-6 py-2 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 rounded-full font-bold text-white shadow-lg animate-pulse hover:animate-none transition-all">
-            ▶ 開始跳動模擬
+            ▶ 開始比賽
           </button>
         </div>
         

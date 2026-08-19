@@ -34,9 +34,22 @@ const lockTeam = () => {
 const showDifficultyModal = ref(false)
 const difficulty = ref('Pro')
 
+const isCapUnlocked = ref(false)
+
 const openDifficultyModal = () => {
   if (myTeam.value.length !== 10) return
+  if (teamSalary.value > salaryCap.value && !isCapUnlocked.value) {
+    alert(`【聯盟警告】\n您的總薪資（${(teamSalary.value / 1000000).toFixed(1)}M）已超過團隊薪資上限（${(salaryCap.value / 1000000).toFixed(1)}M）！\n目前您無法進行例行賽！請先透過交易換取較低薪資的球員以降低總薪資。`)
+    return
+  }
   showDifficultyModal.value = true
+}
+
+const handleTradeModeClick = () => {
+  if (teamSalary.value > salaryCap.value && !isCapUnlocked.value) {
+    alert(`【聯盟警告】\n您的總薪資（${(teamSalary.value / 1000000).toFixed(1)}M）已超過團隊薪資上限（${(salaryCap.value / 1000000).toFixed(1)}M）！\n您已被限制進行任何補強交易，只能進行『降低薪資』的交易以清出空間。`)
+  }
+  isTrading.value = true
 }
 
 const startMatchup = (level: string) => {
@@ -77,18 +90,18 @@ const startMatchup = (level: string) => {
     for (let i=0; i<5; i++) pickRandomRest('', true, ['S', 'A'])
   } else if (level === 'All-Star') {
     pickSpecific('S', 'PG', false)
-    pickSpecific('A', 'SG', false)
-    pickSpecific('A', 'SF', false)
-    pickRandomRest('PF', false, ['S', 'A'])
-    pickRandomRest('C', false, ['S', 'A'])
-    for (let i=0; i<5; i++) pickRandomRest('', true, ['S', 'A'])
+    pickSpecific('S', 'SG', false)
+    pickSpecific('S', 'SF', false)
+    pickSpecific('A', 'PF', false)
+    pickSpecific('A', 'C', false)
+    for (let i=0; i<5; i++) pickRandomRest('', true, ['S'])
   } else if (level === 'HallOfFame') {
     pickSpecific('S', 'PG', false)
     pickSpecific('S', 'SG', false)
-    pickSpecific('A', 'SF', false)
-    pickSpecific('A', 'PF', false)
-    pickSpecific('A', 'C', false)
-    for (let i=0; i<5; i++) pickRandomRest('', true, ['S', 'A'])
+    pickSpecific('S', 'SF', false)
+    pickSpecific('S', 'PF', false)
+    pickSpecific('S', 'C', false)
+    for (let i=0; i<5; i++) pickRandomRest('', true, ['S'])
   }
 
   // Fallback if not enough players found
@@ -227,6 +240,7 @@ const salaryCap = ref(props.initialSalaryCap || 100000000)
 const startTrade = (member: Player) => {
   isTrading.value = true
   selectedTradePlayer.value = member
+  selectedTierFilter.value = member.tier // Auto-filter leaderboard by this player's tier
   setTimeout(() => {
     document.getElementById('leaderboard')?.scrollIntoView({ behavior: 'smooth' })
   }, 100)
@@ -244,46 +258,27 @@ const getTrend = (player: Player) => {
 }
 
 const getDynamicPrice = (player: Player) => {
-  if (!player.originalPrice) return player.price
-  if (!player.originalTier) return player.price
-  
-  const trend = getTrend(player)
-  if (!trend) return player.price
-
-  // S (+10M), A (+5M/-5M), B (+3M/-7M), C (+2M/-10M), D (+1M/-15M)
-  let priceDiff = 0
-  if (trend === 'up') {
-    if (player.tier === 'S') priceDiff = 10000000
-    if (player.tier === 'A') priceDiff = 5000000
-    if (player.tier === 'B') priceDiff = 3000000
-    if (player.tier === 'C') priceDiff = 2000000
-    if (player.tier === 'D') priceDiff = 1000000
-  } else if (trend === 'down') {
-    if (player.tier === 'A') priceDiff = -5000000
-    if (player.tier === 'B') priceDiff = -7000000
-    if (player.tier === 'C') priceDiff = -10000000
-    if (player.tier === 'D') priceDiff = -15000000
-  }
-  
-  return player.originalPrice + priceDiff
+  const globalPlayer = players.value.find(p => p.id === player.id)
+  return globalPlayer ? globalPlayer.price : player.price
 }
 
 const getTradeCapModifier = (player: Player) => {
-  const trend = getTrend(player)
-  let capModifier = 0
-  if (trend === 'up') {
-    if (player.tier === 'S') capModifier = 10000000
-    if (player.tier === 'A') capModifier = 5000000
-    if (player.tier === 'B') capModifier = 3000000
-    if (player.tier === 'C') capModifier = 2000000
-    if (player.tier === 'D') capModifier = 1000000
-  } else if (trend === 'down') {
-    if (player.tier === 'A') capModifier = -5000000
-    if (player.tier === 'B') capModifier = -7000000
-    if (player.tier === 'C') capModifier = -10000000
-    if (player.tier === 'D') capModifier = -15000000
-  }
-  return capModifier
+  if (!player.originalTier) return 0;
+  const globalPlayer = players.value.find(p => p.id === player.id);
+  if (!globalPlayer) return 0;
+
+  const tierCapValues: Record<string, number> = {
+    'D': 0,
+    'C': 3000000,
+    'B': 8000000,
+    'A': 18000000,
+    'S': 38000000
+  };
+
+  const origVal = tierCapValues[player.originalTier] || 0;
+  const currVal = tierCapValues[globalPlayer.tier] || 0;
+
+  return currVal - origVal;
 }
 
 const teamSalary = computed(() => myTeam.value.reduce((sum, p) => sum + getDynamicPrice(p), 0))
@@ -313,21 +308,33 @@ const paginatedPlayers = computed(() => {
 
 const totalPages = computed(() => Math.ceil(filteredPlayers.value.length / 50))
 
-const draggedPlayer = ref<Player | null>(null)
+const selectedSwapPlayer = ref<Player | null>(null)
 
-const onDragStart = (e: DragEvent, player: Player) => {
-  draggedPlayer.value = player
-  if (e.dataTransfer) {
-    e.dataTransfer.effectAllowed = 'move'
-    e.dataTransfer.dropEffect = 'move'
+const handlePlayerClick = (member: Player) => {
+  if (isTrading.value) {
+    if (member.id !== props.player.id) {
+      selectedTradePlayer.value = member
+    }
+  } else {
+    // Click to swap mode
+    if (!selectedSwapPlayer.value) {
+      selectedSwapPlayer.value = member
+    } else {
+      if (selectedSwapPlayer.value.id === member.id) {
+        // Deselect
+        selectedSwapPlayer.value = null
+      } else {
+        // Execute swap
+        executeSwap(selectedSwapPlayer.value, member)
+        selectedSwapPlayer.value = null
+      }
+    }
   }
 }
 
-const onDrop = (targetPlayer: Player) => {
-  if (!draggedPlayer.value || draggedPlayer.value.id === targetPlayer.id) return
-
-  const source = myTeam.value.find(p => p.id === draggedPlayer.value!.id)
-  const target = myTeam.value.find(p => p.id === targetPlayer.id)
+const executeSwap = (sourceRef: Player, targetRef: Player) => {
+  const source = myTeam.value.find(p => p.id === sourceRef.id)
+  const target = myTeam.value.find(p => p.id === targetRef.id)
 
   if (!source || !target || source.id === target.id) return
 
@@ -367,16 +374,14 @@ const onDrop = (targetPlayer: Player) => {
       })
     }
   }
-
-  draggedPlayer.value = null
-}
-
-const onDragEnd = () => {
-  draggedPlayer.value = null
 }
 
 const canTradeFor = (initiator: Player | null, target: Player) => {
   if (!initiator) return false;
+  // Position matching
+  if (!initiator.isBench && initiator.lineupPosition && !target.position.includes(initiator.lineupPosition)) {
+    return false;
+  }
   const tierWeight: Record<string, number> = { 'S': 5, 'A': 4, 'B': 3, 'C': 2, 'D': 1 };
   return (tierWeight[target.tier] || 0) <= (tierWeight[initiator.tier] || 0);
 }
@@ -406,7 +411,7 @@ const confirmTradeExecute = () => {
   const projectedSalary = currentTotal - tradeOutValue + tradeInValue
   const newSalaryCap = salaryCap.value + getTradeCapModifier(source)
   
-  if (projectedSalary > newSalaryCap) {
+  if (projectedSalary > newSalaryCap && !isCapUnlocked.value) {
     alert(`薪資空間不足！這筆交易會讓團隊總薪資達到 ${(projectedSalary / 1000000).toFixed(1)}M，超過 ${(newSalaryCap / 1000000).toFixed(1)}M 上限。`)
     pendingTrade.value = null
     return
@@ -422,8 +427,9 @@ const confirmTradeExecute = () => {
     const newPlayerObj = { 
       ...targetPlayer, 
       lineupPosition: newLineupPos, 
-      isBench: newIsBench
-      // Keep targetPlayer's existing originalTier and originalPrice to maintain trend arrows
+      isBench: newIsBench,
+      originalTier: targetPlayer.tier,
+      originalPrice: targetPlayer.price
     }
     myTeam.value.splice(playerIndex, 1, newPlayerObj)
     
@@ -502,7 +508,8 @@ const setupRealtime = () => {
         // Also update the player in myTeam if they exist
         const teamIndex = myTeam.value.findIndex(p => p.id === updatedPlayer.id)
         if (teamIndex !== -1) {
-          myTeam.value[teamIndex] = { ...myTeam.value[teamIndex], ...updatedPlayer }
+          const existing = myTeam.value[teamIndex]
+          myTeam.value[teamIndex] = { ...existing, ...updatedPlayer, price: existing.price }
         }
       }
     })
@@ -544,7 +551,7 @@ onMounted(() => {
       // Update myTeam scores and tiers dynamically in fallback mode
       myTeam.value = myTeam.value.map(member => {
         const updated = players.value.find(p => p.id === member.id)
-        return updated ? { ...member, score: updated.score, tier: updated.tier, pts: updated.pts } : member
+        return updated ? { ...member, score: updated.score, tier: updated.tier, pts: updated.pts, price: member.price } : member
       })
     }, 30000)
   }
@@ -574,8 +581,16 @@ const getTierBorder = (tier: string) => {
             <h2 class="text-4xl md:text-5xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-yellow-500 uppercase transform -skew-x-6 drop-shadow-lg">
               球隊陣容
             </h2>
-            <div class="px-4 py-1.5 rounded-full bg-black/50 border border-orange-500/30 text-sm font-black italic tracking-widest text-orange-200 shadow-inner">
-              總薪資: <span :class="['font-mono', teamSalary > salaryCap ? 'text-red-400' : 'text-green-400']">${{ (teamSalary / 1000000).toFixed(1) }}M</span> / ${{ (salaryCap / 1000000).toFixed(1) }}M
+            <div class="px-4 py-1.5 rounded-full bg-black/50 border border-orange-500/30 text-sm font-black italic tracking-widest text-orange-200 shadow-inner flex items-center gap-2">
+              <span>總薪資: <span :class="['font-mono', (teamSalary > salaryCap && !isCapUnlocked) ? 'text-red-400' : 'text-green-400']">${{ (teamSalary / 1000000).toFixed(1) }}M</span> / <span v-if="!isCapUnlocked">${{ (salaryCap / 1000000).toFixed(1) }}M</span><span v-else class="text-yellow-400 font-bold"><span class="text-lg leading-none mr-1">∞</span><span class="text-xs text-gray-500">(${{ (salaryCap / 1000000).toFixed(1) }}M)</span></span></span>
+              <button @click="isCapUnlocked = !isCapUnlocked" :class="['p-1 rounded hover:bg-white/10 transition-colors', isCapUnlocked ? 'text-yellow-400' : 'text-gray-500']" :title="isCapUnlocked ? '重新開啟薪資上限' : '解鎖薪資上限 (無限制交易)'">
+                <svg v-if="isCapUnlocked" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M10 2a5 5 0 00-5 5v2a2 2 0 00-2 2v5a2 2 0 002 2h10a2 2 0 002-2v-5a2 2 0 00-2-2H7V7a3 3 0 015.905-.75 1 1 0 001.937-.5A5.002 5.002 0 0010 2z" />
+                </svg>
+                <svg v-else xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd" />
+                </svg>
+              </button>
             </div>
           </div>
           <div class="flex gap-3">
@@ -604,7 +619,7 @@ const getTierBorder = (tier: string) => {
               >
                 進行例行賽
               </button>
-              <button v-if="!isTrading" @click="isTrading = true" class="px-6 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 text-white font-bold italic uppercase tracking-widest rounded-full shadow-lg hover:shadow-blue-500/50 transition-all transform hover:scale-105 active:scale-95">
+              <button v-if="!isTrading" @click="handleTradeModeClick" class="px-6 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 text-white font-bold italic uppercase tracking-widest rounded-full shadow-lg hover:shadow-blue-500/50 transition-all transform hover:scale-105 active:scale-95">
                 啟動交易模式
               </button>
               <button v-else @click="cancelTrade" class="px-6 py-2 bg-gradient-to-r from-red-500 to-pink-600 hover:from-red-400 hover:to-pink-500 text-white font-bold italic uppercase tracking-widest rounded-full shadow-lg hover:shadow-red-500/50 transition-all transform hover:scale-105 active:scale-95">
@@ -618,22 +633,18 @@ const getTierBorder = (tier: string) => {
           <div 
             v-for="member in myTeam" 
             :key="member.id" 
-            draggable="true"
-            @dragstart="onDragStart($event, member)"
-            @dragover.prevent
-            @drop="onDrop(member)"
-            @dragend="onDragEnd"
-            @click="isTrading && member.id !== props.player.id ? selectedTradePlayer = member : null"
+            @click="handlePlayerClick(member)"
             :class="[
               'relative rounded-xl overflow-hidden p-4 flex flex-col justify-between aspect-[3/4] transform transition-transform border shadow-xl', 
-              !draggedPlayer && !isTrading ? 'hover:-translate-y-2 cursor-grab active:cursor-grabbing' : '',
+              !selectedSwapPlayer && !isTrading ? 'hover:-translate-y-2 cursor-pointer' : '',
               isTrading && member.id !== props.player.id ? 'cursor-pointer hover:-translate-y-2' : '',
               isTrading && member.id === props.player.id ? 'opacity-50 grayscale cursor-not-allowed' : '',
               getTierClass(member.tier), 
-              member.id === props.player.id && !isTrading ? 'ring-4 ring-orange-400 scale-105 z-10' : '',
+              member.id === props.player.id && !isTrading && selectedSwapPlayer?.id !== member.id ? 'ring-4 ring-orange-400 scale-105 z-10' : '',
               isTrading && selectedTradePlayer?.id === member.id ? 'ring-4 ring-blue-400 scale-105 z-20 shadow-blue-500/50' : '',
-              draggedPlayer && draggedPlayer.id !== member.id && draggedPlayer.position.includes(member.lineupPosition || '') && member.position.includes(draggedPlayer.lineupPosition || '') ? 'ring-4 ring-green-400 scale-105 opacity-100 z-20 shadow-green-500/50 cursor-pointer' : '',
-              draggedPlayer && draggedPlayer.id !== member.id && !(draggedPlayer.position.includes(member.lineupPosition || '') && member.position.includes(draggedPlayer.lineupPosition || '')) ? 'opacity-30 grayscale blur-[1px]' : ''
+              !isTrading && selectedSwapPlayer?.id === member.id ? 'ring-4 ring-yellow-400 scale-105 z-20 shadow-yellow-500/50' : '',
+              !isTrading && selectedSwapPlayer && selectedSwapPlayer.id !== member.id && selectedSwapPlayer.position.includes(member.lineupPosition || '') && member.position.includes(selectedSwapPlayer.lineupPosition || '') ? 'ring-4 ring-green-400 scale-105 opacity-100 z-20 shadow-green-500/50 cursor-pointer hover:bg-white/10' : '',
+              !isTrading && selectedSwapPlayer && selectedSwapPlayer.id !== member.id && !(selectedSwapPlayer.position.includes(member.lineupPosition || '') && member.position.includes(selectedSwapPlayer.lineupPosition || '')) ? 'opacity-30 grayscale blur-[1px]' : ''
             ]"
           >
             <div class="absolute inset-0 bg-gradient-to-b from-transparent to-black/80 z-0"></div>
@@ -765,9 +776,9 @@ const getTierBorder = (tier: string) => {
                 v-else-if="selectedTradePlayer && !canTradeFor(selectedTradePlayer, p)"
                 disabled
                 class="px-3 py-1 rounded text-xs font-bold uppercase transition-all bg-gray-800 text-red-500/50 cursor-not-allowed border border-red-900/30"
-                title="只能向下交易"
+                title="只能向下交易或位置不符"
               >
-                不可越級
+                不可交易
               </button>
               <button 
                 v-else
@@ -859,8 +870,8 @@ const getTierBorder = (tier: string) => {
           <div class="bg-gray-950 p-4 rounded-lg border border-gray-800 text-sm">
             <div class="flex justify-between text-gray-400 mb-2">
               <span>交易後總薪資估算</span>
-              <span :class="{'text-red-400': (teamSalary - getDynamicPrice(pendingTrade.source) + getDynamicPrice(pendingTrade.target)) > (salaryCap + getTradeCapModifier(pendingTrade.source))}">
-                ${{ ((teamSalary - getDynamicPrice(pendingTrade.source) + getDynamicPrice(pendingTrade.target)) / 1000000).toFixed(1) }}M / <span class="text-white font-bold">${{ ((salaryCap + getTradeCapModifier(pendingTrade.source)) / 1000000).toFixed(1) }}M</span>
+              <span :class="{'text-red-400': (teamSalary - getDynamicPrice(pendingTrade.source) + getDynamicPrice(pendingTrade.target)) > (salaryCap + getTradeCapModifier(pendingTrade.source)) && !isCapUnlocked}">
+                ${{ ((teamSalary - getDynamicPrice(pendingTrade.source) + getDynamicPrice(pendingTrade.target)) / 1000000).toFixed(1) }}M / <span class="text-white font-bold" v-if="!isCapUnlocked">${{ ((salaryCap + getTradeCapModifier(pendingTrade.source)) / 1000000).toFixed(1) }}M</span><span v-else class="text-yellow-400 font-bold"><span class="text-lg leading-none mr-1">∞</span><span class="text-xs text-gray-500">(${{ ((salaryCap + getTradeCapModifier(pendingTrade.source)) / 1000000).toFixed(1) }}M)</span></span>
               </span>
             </div>
             
@@ -907,7 +918,7 @@ const getTierBorder = (tier: string) => {
           <button @click="startMatchup('All-Star')" class="w-full p-4 rounded-xl border border-gray-700 bg-gray-800/50 hover:bg-gray-700 hover:border-gray-500 transition-all text-left group flex justify-between items-center">
             <div>
               <div class="font-bold text-xl text-white group-hover:text-purple-400">全明星 (All-Star)</div>
-              <div class="text-sm text-gray-400">對手包含 1 名 S 級、2 名 A 級球星</div>
+              <div class="text-sm text-gray-400">對手包含 3 名 S 級、2 名 A 級球星</div>
             </div>
             <div class="text-2xl">🥈</div>
           </button>
@@ -915,7 +926,7 @@ const getTierBorder = (tier: string) => {
           <button @click="startMatchup('HallOfFame')" class="w-full p-4 rounded-xl border border-gray-700 bg-gray-800/50 hover:bg-gray-700 hover:border-gray-500 transition-all text-left group flex justify-between items-center shadow-lg shadow-orange-500/10">
             <div>
               <div class="font-bold text-xl text-white group-hover:text-orange-400">名人堂 (Hall of Fame)</div>
-              <div class="text-sm text-gray-400">對手包含 2 名 S 級、3 名 A 級球星</div>
+              <div class="text-sm text-gray-400">對手包含 5 名 S 級頂尖球星</div>
             </div>
             <div class="text-2xl">🏆</div>
           </button>
